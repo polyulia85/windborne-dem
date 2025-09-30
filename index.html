@@ -2,30 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"/>
-  <title>WindBorne Atlas – Live Constellation + Weather Overlay</title>
+  <title>WindBorne Atlas – Live Constellation + Weather</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link rel="stylesheet"
-        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-        crossorigin="">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; }
     #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
-    header { padding: 10px 14px; background: #0b1220; color: #fff; display: flex; gap: 12px; align-items: center; }
-    header h1 { font-size: 16px; margin: 0; opacity: .95; }
-    header .badge { background: #1f2a44; padding: 4px 8px; border-radius: 8px; font-size: 12px; }
-    #map { width: 100%; height: 100%; }
-    .legend {
-      position: absolute; right: 12px; bottom: 12px; background: rgba(255,255,255,.95);
-      border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.15); padding: 10px 12px; font-size: 12px;
+    header { padding: 10px 14px; background:#0b1220; color:#fff; display:flex; gap:12px; align-items:center; }
+    header h1 { font-size:16px; margin:0; opacity:.95; }
+    header .badge { background:#1f2a44; padding:4px 8px; border-radius:8px; font-size:12px; }
+    .controls { display:flex; gap:8px; margin-left:auto; align-items:center; }
+    .btn{cursor:pointer;background:#1f6feb;color:#fff;border:none;border-radius:8px;padding:8px 12px;font-weight:600;}
+    .btn:disabled{opacity:.6;cursor:not-allowed;}
+    select{background:#111826;border:1px solid #2b3345;color:#fff;border-radius:8px;padding:8px 10px;}
+    #map { width:100%; height:100%; }
+    .legend{
+      position:absolute; right:12px; bottom:12px; background:rgba(255,255,255,.95);
+      border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.15); padding:10px 12px; font-size:12px;
     }
-    .legend div { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
-    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    .dot-current { background:#ff7043; }
-    .dot-history { background:#4f93ff; }
-    .btn { cursor:pointer; background:#1f6feb; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-weight:600; }
-    .btn:disabled { opacity:.6; cursor:not-allowed; }
-    .controls { display:flex; gap:8px; margin-left:auto; }
+    .legend div{display:flex;align-items:center;gap:8px;margin:4px 0;}
+    .dot{width:10px;height:10px;border-radius:50%;display:inline-block;}
+    .dot-current{background:#ff7043;}
+    .dot-history{background:#4f93ff;}
   </style>
 </head>
 <body>
@@ -33,7 +31,19 @@
   <header>
     <h1>WindBorne Constellation (last 24h) + Weather</h1>
     <span class="badge">Live data</span>
+
     <div class="controls">
+      <!-- Переключатель погодных слоёв -->
+      <label for="wxLayer">Weather layer:</label>
+      <select id="wxLayer" title="Weather overlay">
+        <option value="none">None</option>
+        <option value="clouds">Clouds</option>
+        <option value="precipitation">Precipitation</option>
+        <option value="wind">Wind</option>
+        <option value="temp">Temperature</option>
+        <option value="pressure">Pressure (isobars)</option>
+      </select>
+
       <button id="reloadBtn" class="btn">Reload data</button>
       <button id="fitBtn" class="btn">Fit to markers</button>
     </div>
@@ -47,30 +57,10 @@
   <div><span class="dot dot-history"></span> Previous hours (01–23.json)</div>
 </div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-        crossorigin=""></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (async function () {
-  // =============== ПЛАН Б: fallback-координаты ===============
-  // ⚠️ ЗАМЕНИ весь массив ниже на твой полный список [[lat,lon, ...], ...]
-  const FALLBACK_TUPLES = [
-    /* <<< ВСТАВЬ СВОЙ БОЛЬШОЙ МАССИВ СЮДА >>> */
-    [-3.6866209083923316, 47.94342952321435, 2.4566964878051536],
-    [76.03305441009394, -131.82779586856907, 2.1756886675166793],
-    [-57.36759562635329, 16.31606113580246, 5.0643282741039926],
-    [13.573293746974707, -54.314582185121346, 4.583006197040007],
-    [-21.15188964347801, -41.74720556673123, 15.992208876345693],
-    [68.40315919439244, -166.19313100338627, 3.772459492018699],
-    [31.90356751748466, -16.44306080506979, 2.1943719841252527],
-    [-59.340565903606766, 170.53862181657001, 4.4123428269845295],
-    [38.82157374825482, 53.88419322285918, 7.012712447175849],
-    [-28.748269479454745, 33.52970672534801, 4.967378521570349]
-    // …оставил десяток точек, чтобы сразу увидеть результат.
-    // Вставь свой полный список — и на карте будет много-много маркеров.
-  ];
-  // =============================================================
-
+  // ===== БАЗА КАРТЫ ==========================================================
   const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
@@ -80,9 +70,48 @@
   const historyLayer = L.layerGroup().addTo(map);
   let lastBounds = null;
 
+  // ====== ПОГОДНЫЕ СЛОИ OpenWeather (tile overlay) ===========================
+  // ВСТАВЬ СВОЙ КЛЮЧ:
+ const OW_KEY = '5eef9f35077b075e9e701fdb51bd1b57';
+
+  // Набор доступных тайловых слоёв
+  const owTiles = {
+    clouds: () => L.tileLayer(`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
+    precipitation: () => L.tileLayer(`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
+    wind: () => L.tileLayer(`https://tile.openweathermap.org/map/wind_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
+    temp: () => L.tileLayer(`https://tile.openweathermap.org/map/temp_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
+    pressure: () => L.tileLayer(`https://tile.openweathermap.org/map/pressure_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 })
+  };
+
+  let activeWeatherLayer = null;
+  const wxSelect = document.getElementById('wxLayer');
+
+  function setWeatherLayer(kind) {
+    // убрать старый слой
+    if (activeWeatherLayer) {
+      map.removeLayer(activeWeatherLayer);
+      activeWeatherLayer = null;
+    }
+    // добавить новый
+    if (kind !== 'none') {
+      // если ключ не вставлен — предупредим
+      if (!OW_KEY || OW_KEY.includes('PASTE_YOUR_KEY_HERE')) {
+        alert('Для погодных слоёв вставь свой OpenWeather API key в переменную OW_KEY.');
+        wxSelect.value = 'none';
+        return;
+      }
+      activeWeatherLayer = owTiles[kind]();
+      activeWeatherLayer.addTo(map);
+    }
+  }
+  wxSelect.addEventListener('change', (e) => setWeatherLayer(e.target.value));
+  // по умолчанию без слоя
+  setWeatherLayer('none');
+
+  // ====== ПРОКСИ К ИХ API (у тебя уже настроен /api/windborne?h=XX) =========
   async function fetchHour(hourIdx) {
     const hour = String(hourIdx).padStart(2,'0');
-    const url = `/api/windborne?h=${hour}`;     // идёт на наш Vercel-прокси
+    const url = `/api/windborne?h=${hour}`;
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -93,13 +122,11 @@
     }
   }
 
-  // Универсальный парсер:
-  //  - объекты {lat/lon/...}
-  //  - кортежи [lat, lon] или [lat, lon, …]
+  // ==== Разбор «грязных» структур JSON в список точек =======================
   function extractPoints(raw) {
     const pts = [];
-
-    const pushObj = (o) => {
+    const pushIfValid = (o) => {
+      if (!o) return;
       const lat = Number(o.lat ?? o.latitude ?? o.Lat ?? o.y);
       const lon = Number(o.lon ?? o.lng ?? o.longitude ?? o.Lon ?? o.x);
       if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
@@ -111,35 +138,23 @@
         });
       }
     };
-
     const walk = (val) => {
-      if (Array.isArray(val)) {
-        // кортеж [lat,lon(,*)]
-        if (val.length >= 2 && val.every(n => typeof n === 'number')) {
-          const [lat, lon] = val;
-          if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
-            pts.push({ lat, lon, id: 'tuple' });
-            return;
-          }
-        }
-        val.forEach(walk);
-        return;
-      }
-      if (val && typeof val === 'object') {
+      if (Array.isArray(val)) { val.forEach(walk); return; }
+      if (typeof val === 'object' && val) {
         if (Array.isArray(val.balloons)) val.balloons.forEach(walk);
         if (Array.isArray(val.data)) val.data.forEach(walk);
-        pushObj(val);
+        pushIfValid(val);
         for (const k in val) {
           const v = val[k];
-          if (Array.isArray(v) || (v && typeof v === 'object')) walk(v);
+          if (Array.isArray(v) || (typeof v === 'object' && v)) walk(v);
         }
       }
     };
-
     walk(raw);
     return pts;
   }
 
+  // Для всплывашек — текущая погода в точке (без ключа, Open-Meteo)
   async function getWeather(lat, lon) {
     const u = new URL('https://api.open-meteo.com/v1/forecast');
     u.searchParams.set('latitude', lat);
@@ -152,7 +167,9 @@
       const cw = j.current_weather;
       if (!cw) return null;
       return { tempC: cw.temperature, wind: cw.windspeed, dir: cw.winddirection };
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   function makeCircle(lat, lon, color) {
@@ -170,21 +187,14 @@
     const allBounds = [];
 
     for (let h = 0; h <= 23; h++) {
-      let raw = await fetchHour(h);
-
-      // Если час 00 не вернул данных — используем fallback-массив
-      if (h === 0 && (!raw || extractPoints(raw).length === 0) && FALLBACK_TUPLES.length) {
-        raw = FALLBACK_TUPLES;
-        console.info('Using FALLBACK_TUPLES for hour 00:', FALLBACK_TUPLES.length, 'points');
-      }
-
+      const raw = await fetchHour(h);
+      if (!raw) continue;
       const pts = extractPoints(raw);
       if (!pts.length) continue;
 
       const layer = (h === 0) ? currentLayer : historyLayer;
       const color = (h === 0) ? '#ff7043' : '#4f93ff';
 
-      // сгруппируем по id, чтобы рисовать простые треки
       const byId = new Map();
       for (const p of pts) {
         if (!byId.has(p.id)) byId.set(p.id, []);
@@ -192,30 +202,29 @@
       }
 
       for (const [id, arr] of byId) {
-  for (const p of arr) {
-    const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
-    allBounds.push([p.lat, p.lon]);
-    (async () => {
-      const w = await getWeather(p.lat, p.lon);
-      const lines = [
-        `<strong>Balloon:</strong> ${id}`,
-        p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
-        p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
-        w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
-      ].filter(Boolean);
-      marker.bindPopup(lines.join('<br/>'));
-    })();
-  }
+        for (const p of arr) {
+          const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
+          allBounds.push([p.lat, p.lon]);
+          (async () => {
+            const w = await getWeather(p.lat, p.lon);
+            const lines = [
+              `<strong>Balloon:</strong> ${id}`,
+              p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
+              p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
+              w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
+            ].filter(Boolean);
+            marker.bindPopup(lines.join('<br/>'));
+          })();
+        }
 
-  // Закомментировано: рисование линий между точками
-  // if (arr.length >= 2) {
-  //   L.polyline(arr.map(p => [p.lat, p.lon]), {
-  //     color,
-  //     weight: (h === 0 ? 3 : 2),
-  //     opacity: (h === 0 ? 0.8 : 0.5)
-  //   }).addTo(layer);
-  // }
-}
+        /* Треки можно включить обратно — сейчас выключены
+        if (arr.length >= 2) {
+          L.polyline(arr.map(p => [p.lat, p.lon]), {
+            color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5)
+          }).addTo(layer);
+        }
+        */
+      }
     }
 
     if (allBounds.length) {
@@ -228,12 +237,9 @@
   document.getElementById('reloadBtn').onclick = renderAll;
   document.getElementById('fitBtn').onclick = () => { if (lastBounds) map.fitBounds(lastBounds.pad(0.2)); };
 
+  // Первичная отрисовка
   renderAll();
-
-  // доступ из консоли
-  window.__leafletMap = map;
 })();
 </script>
 </body>
 </html>
-
