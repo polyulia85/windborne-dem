@@ -192,26 +192,30 @@
       }
 
       for (const [id, arr] of byId) {
-        for (const p of arr) {
-          const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
-          allBounds.push([p.lat, p.lon]);
-          (async () => {
-            const w = await getWeather(p.lat, p.lon);
-            const lines = [
-              `<strong>Balloon:</strong> ${id}`,
-              p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
-              p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
-              w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
-            ].filter(Boolean);
-            marker.bindPopup(lines.join('<br/>'));
-          })();
-        }
+  for (const p of arr) {
+    const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
+    allBounds.push([p.lat, p.lon]);
+    (async () => {
+      const w = await getWeather(p.lat, p.lon);
+      const lines = [
+        `<strong>Balloon:</strong> ${id}`,
+        p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
+        p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
+        w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
+      ].filter(Boolean);
+      marker.bindPopup(lines.join('<br/>'));
+    })();
+  }
 
-        if (arr.length >= 2) {
-          const latlngs = arr.map(p => [p.lat, p.lon]);
-          L.polyline(latlngs, { color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5) }).addTo(layer);
-        }
-      }
+  // Закомментировано: рисование линий между точками
+  // if (arr.length >= 2) {
+  //   L.polyline(arr.map(p => [p.lat, p.lon]), {
+  //     color,
+  //     weight: (h === 0 ? 3 : 2),
+  //     opacity: (h === 0 ? 0.8 : 0.5)
+  //   }).addTo(layer);
+  // }
+}
     }
 
     if (allBounds.length) {
@@ -232,3 +236,4 @@
 </script>
 </body>
 </html>
+
