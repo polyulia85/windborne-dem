@@ -4,12 +4,10 @@
   <meta charset="utf-8"/>
   <title>WindBorne Atlas – Live Constellation + Weather Overlay</title>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
+  <link rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="">
   <style>
     html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; }
     #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
@@ -50,16 +48,28 @@
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
 <script>
 (async function () {
-  // ===== 1) ПЛАН Б — ВСТАВЬ СВОЙ МАССИВ СЮДА =====
-  // ВСТАВЬ вместо [...]:
+  // =============== ПЛАН Б: fallback-координаты ===============
+  // ⚠️ ЗАМЕНИ весь массив ниже на твой полный список [[lat,lon, ...], ...]
   const FALLBACK_TUPLES = [
-    /* <<< ВСТАВЬ ТВОЙ БОЛЬШОЙ МАССИВ [[lat,lon,…], …] СЮДА >>> */
+    /* <<< ВСТАВЬ СВОЙ БОЛЬШОЙ МАССИВ СЮДА >>> */
+    [-3.6866209083923316, 47.94342952321435, 2.4566964878051536],
+    [76.03305441009394, -131.82779586856907, 2.1756886675166793],
+    [-57.36759562635329, 16.31606113580246, 5.0643282741039926],
+    [13.573293746974707, -54.314582185121346, 4.583006197040007],
+    [-21.15188964347801, -41.74720556673123, 15.992208876345693],
+    [68.40315919439244, -166.19313100338627, 3.772459492018699],
+    [31.90356751748466, -16.44306080506979, 2.1943719841252527],
+    [-59.340565903606766, 170.53862181657001, 4.4123428269845295],
+    [38.82157374825482, 53.88419322285918, 7.012712447175849],
+    [-28.748269479454745, 33.52970672534801, 4.967378521570349]
+    // …оставил десяток точек, чтобы сразу увидеть результат.
+    // Вставь свой полный список — и на карте будет много-много маркеров.
   ];
-  // ===============================================
+  // =============================================================
 
   const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -72,20 +82,20 @@
 
   async function fetchHour(hourIdx) {
     const hour = String(hourIdx).padStart(2,'0');
-    const url = `/api/windborne?h=${hour}`;
+    const url = `/api/windborne?h=${hour}`;     // идёт на наш Vercel-прокси
     try {
       const res = await fetch(url, { cache: 'no-store' });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
       console.warn('Fetch failed for', url, e);
-      return null; // пусть верхний уровень решает, чем подменять
+      return null;
     }
   }
 
-  // Принимаем:
-  //  - объекты с полями lat/lon/…
-  //  - массивы [lat, lon], [lat, lon, *]
+  // Универсальный парсер:
+  //  - объекты {lat/lon/...}
+  //  - кортежи [lat, lon] или [lat, lon, …]
   function extractPoints(raw) {
     const pts = [];
 
@@ -104,7 +114,7 @@
 
     const walk = (val) => {
       if (Array.isArray(val)) {
-        // поддержка кортежей [lat, lon, ...]
+        // кортеж [lat,lon(,*)]
         if (val.length >= 2 && val.every(n => typeof n === 'number')) {
           const [lat, lon] = val;
           if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
@@ -112,7 +122,6 @@
             return;
           }
         }
-        // иначе — рекурсивно обойти
         val.forEach(walk);
         return;
       }
@@ -163,7 +172,7 @@
     for (let h = 0; h <= 23; h++) {
       let raw = await fetchHour(h);
 
-      // Если час 00 и апстрим пустой — используем твой массив
+      // Если час 00 не вернул данных — используем fallback-массив
       if (h === 0 && (!raw || extractPoints(raw).length === 0) && FALLBACK_TUPLES.length) {
         raw = FALLBACK_TUPLES;
         console.info('Using FALLBACK_TUPLES for hour 00:', FALLBACK_TUPLES.length, 'points');
@@ -175,7 +184,7 @@
       const layer = (h === 0) ? currentLayer : historyLayer;
       const color = (h === 0) ? '#ff7043' : '#4f93ff';
 
-      // сгруппируем по id, чтобы рисовать треки
+      // сгруппируем по id, чтобы рисовать простые треки
       const byId = new Map();
       for (const p of pts) {
         if (!byId.has(p.id)) byId.set(p.id, []);
@@ -217,7 +226,7 @@
 
   renderAll();
 
-  // делаем карту доступной в консоли на всякий случай
+  // доступ из консоли
   window.__leafletMap = map;
 })();
 </script>
