@@ -33,7 +33,6 @@
     <span class="badge">Live data</span>
 
     <div class="controls">
-      <!-- Переключатель погодных слоёв -->
       <label for="wxLayer">Weather layer:</label>
       <select id="wxLayer" title="Weather overlay">
         <option value="none">None</option>
@@ -60,7 +59,7 @@
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 <script>
 (async function () {
-  // ===== БАЗА КАРТЫ ==========================================================
+  // ===== MAP ================================================================
   const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
@@ -70,11 +69,8 @@
   const historyLayer = L.layerGroup().addTo(map);
   let lastBounds = null;
 
-  // ====== ПОГОДНЫЕ СЛОИ OpenWeather (tile overlay) ===========================
-  // ВСТАВЬ СВОЙ КЛЮЧ:
- const OW_KEY = '5eef9f35077b075e9e701fdb51bd1b57';
-
-  // Набор доступных тайловых слоёв
+  // ===== OpenWeather tile overlays =========================================
+  const OW_KEY = '5eef9f35077b075e9e701fdb51bd1b57';
   const owTiles = {
     clouds: () => L.tileLayer(`https://tile.openweathermap.org/map/clouds_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
     precipitation: () => L.tileLayer(`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${OW_KEY}`, { opacity: 0.6 }),
@@ -87,28 +83,16 @@
   const wxSelect = document.getElementById('wxLayer');
 
   function setWeatherLayer(kind) {
-    // убрать старый слой
-    if (activeWeatherLayer) {
-      map.removeLayer(activeWeatherLayer);
-      activeWeatherLayer = null;
-    }
-    // добавить новый
+    if (activeWeatherLayer) { map.removeLayer(activeWeatherLayer); activeWeatherLayer = null; }
     if (kind !== 'none') {
-      // если ключ не вставлен — предупредим
-      if (!OW_KEY || OW_KEY.includes('PASTE_YOUR_KEY_HERE')) {
-        alert('Для погодных слоёв вставь свой OpenWeather API key в переменную OW_KEY.');
-        wxSelect.value = 'none';
-        return;
-      }
-      activeWeatherLayer = owTiles[kind]();
-      activeWeatherLayer.addTo(map);
+      if (!OW_KEY) { alert('Insert OpenWeather API key'); wxSelect.value = 'none'; return; }
+      activeWeatherLayer = owTiles[kind](); activeWeatherLayer.addTo(map);
     }
   }
   wxSelect.addEventListener('change', (e) => setWeatherLayer(e.target.value));
-  // по умолчанию без слоя
   setWeatherLayer('none');
 
-  // ====== ПРОКСИ К ИХ API (у тебя уже настроен /api/windborne?h=XX) =========
+  // ===== Data fetch (your proxy: /api/windborne?h=XX) =======================
   async function fetchHour(hourIdx) {
     const hour = String(hourIdx).padStart(2,'0');
     const url = `/api/windborne?h=${hour}`;
@@ -117,19 +101,32 @@
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
-      console.warn('Fetch failed for', url, e);
+      console.error('Fetch failed for', url, e);
       return null;
     }
   }
 
-  // ==== Разбор «грязных» структур JSON в список точек =======================
+  // ===== Robust parser: supports [[lat, lon, ...], ...] and objects =========
   function extractPoints(raw) {
+    // Case A: array of arrays -> [[lat, lon, ...], ...]
+    if (Array.isArray(raw) && raw.length && Array.isArray(raw[0])) {
+      return raw.map(row => {
+        const lat = Number(row[0]);
+        const lon = Number(row[1]);
+        return (Number.isFinite(lat) && Number.isFinite(lon) &&
+                Math.abs(lat) <= 90 && Math.abs(lon) <= 180)
+               ? { lat, lon, id: 'unknown' } : null;
+      }).filter(Boolean);
+    }
+
+    // Case B: nested objects/arrays with lat/lon fields
     const pts = [];
     const pushIfValid = (o) => {
       if (!o) return;
       const lat = Number(o.lat ?? o.latitude ?? o.Lat ?? o.y);
       const lon = Number(o.lon ?? o.lng ?? o.longitude ?? o.Lon ?? o.x);
-      if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+      if (Number.isFinite(lat) && Number.isFinite(lon) &&
+          Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
         pts.push({
           lat, lon,
           id: o.id ?? o.name ?? o.balloon_id ?? 'unknown',
@@ -154,7 +151,7 @@
     return pts;
   }
 
-  // Для всплывашек — текущая погода в точке (без ключа, Open-Meteo)
+  // ===== Popup helper: current weather from Open-Meteo (no key) =============
   async function getWeather(lat, lon) {
     const u = new URL('https://api.open-meteo.com/v1/forecast');
     u.searchParams.set('latitude', lat);
@@ -167,9 +164,7 @@
       const cw = j.current_weather;
       if (!cw) return null;
       return { tempC: cw.temperature, wind: cw.windspeed, dir: cw.winddirection };
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   function makeCircle(lat, lon, color) {
@@ -195,35 +190,51 @@
       const layer = (h === 0) ? currentLayer : historyLayer;
       const color = (h === 0) ? '#ff7043' : '#4f93ff';
 
-      const byId = new Map();
-      for (const p of pts) {
-        if (!byId.has(p.id)) byId.set(p.id, []);
-        byId.get(p.id).push(p);
-      }
-
-      for (const [id, arr] of byId) {
-        for (const p of arr) {
+      // If no IDs in source, just plot all points
+      if (!pts.some(p => p.id && p.id !== 'unknown')) {
+        for (const p of pts) {
           const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
           allBounds.push([p.lat, p.lon]);
           (async () => {
             const w = await getWeather(p.lat, p.lon);
             const lines = [
-              `<strong>Balloon:</strong> ${id}`,
-              p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
-              p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
+              `<strong>Position</strong>`,
+              `<strong>Lat:</strong> ${p.lat.toFixed(4)}, <strong>Lon:</strong> ${p.lon.toFixed(4)}`,
               w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
-            ].filter(Boolean);
+            ];
             marker.bindPopup(lines.join('<br/>'));
           })();
         }
-
-        /* Треки можно включить обратно — сейчас выключены
-        if (arr.length >= 2) {
-          L.polyline(arr.map(p => [p.lat, p.lon]), {
-            color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5)
-          }).addTo(layer);
+      } else {
+        // Group by id (for track lines, if you want to enable later)
+        const byId = new Map();
+        for (const p of pts) {
+          if (!byId.has(p.id)) byId.set(p.id, []);
+          byId.get(p.id).push(p);
         }
-        */
+        for (const [, arr] of byId) {
+          for (const p of arr) {
+            const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
+            allBounds.push([p.lat, p.lon]);
+            (async () => {
+              const w = await getWeather(p.lat, p.lon);
+              const lines = [
+                `<strong>Balloon:</strong> ${p.id}`,
+                p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
+                p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
+                w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
+              ].filter(Boolean);
+              marker.bindPopup(lines.join('<br/>'));
+            })();
+          }
+          /* Track lines (optional)
+          if (arr.length >= 2) {
+            L.polyline(arr.map(p => [p.lat, p.lon]), {
+              color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5)
+            }).addTo(layer);
+          }
+          */
+        }
       }
     }
 
@@ -237,7 +248,7 @@
   document.getElementById('reloadBtn').onclick = renderAll;
   document.getElementById('fitBtn').onclick = () => { if (lastBounds) map.fitBounds(lastBounds.pad(0.2)); };
 
-  // Первичная отрисовка
+  // Initial render
   renderAll();
 })();
 </script>
