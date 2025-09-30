@@ -25,9 +25,7 @@
     .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
     .dot-current { background:#ff7043; }
     .dot-history { background:#4f93ff; }
-    .btn {
-      cursor:pointer; background:#1f6feb; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-weight:600;
-    }
+    .btn { cursor:pointer; background:#1f6feb; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-weight:600; }
     .btn:disabled { opacity:.6; cursor:not-allowed; }
     .controls { display:flex; gap:8px; margin-left:auto; }
   </style>
@@ -51,13 +49,18 @@
   <div><span class="dot dot-history"></span> Previous hours (01–23.json)</div>
 </div>
 
-<script
-  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-  crossorigin=""
-></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
 <script>
 (async function () {
+  // ===== 1) ПЛАН Б — ВСТАВЬ СВОЙ МАССИВ СЮДА =====
+  // ВСТАВЬ вместо [...]:
+  const FALLBACK_TUPLES = [
+    /* <<< ВСТАВЬ ТВОЙ БОЛЬШОЙ МАССИВ [[lat,lon,…], …] СЮДА >>> */
+  ];
+  // ===============================================
+
   const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; OpenStreetMap contributors'
@@ -67,7 +70,6 @@
   const historyLayer = L.layerGroup().addTo(map);
   let lastBounds = null;
 
-  // ---- FETCH FROM SERVERLESS PROXY (api/windborne.js)
   async function fetchHour(hourIdx) {
     const hour = String(hourIdx).padStart(2,'0');
     const url = `/api/windborne?h=${hour}`;
@@ -77,15 +79,17 @@
       return await res.json();
     } catch (e) {
       console.warn('Fetch failed for', url, e);
-      return null;
+      return null; // пусть верхний уровень решает, чем подменять
     }
   }
 
-  // ---- BEST-EFFORT PARSER (accepts various shapes)
+  // Принимаем:
+  //  - объекты с полями lat/lon/…
+  //  - массивы [lat, lon], [lat, lon, *]
   function extractPoints(raw) {
     const pts = [];
-    const pushIfValid = (o) => {
-      if (!o) return;
+
+    const pushObj = (o) => {
       const lat = Number(o.lat ?? o.latitude ?? o.Lat ?? o.y);
       const lon = Number(o.lon ?? o.lng ?? o.longitude ?? o.Lon ?? o.x);
       if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
@@ -97,49 +101,55 @@
         });
       }
     };
+
     const walk = (val) => {
-      if (Array.isArray(val)) { val.forEach(walk); return; }
-      if (typeof val === 'object' && val) {
+      if (Array.isArray(val)) {
+        // поддержка кортежей [lat, lon, ...]
+        if (val.length >= 2 && val.every(n => typeof n === 'number')) {
+          const [lat, lon] = val;
+          if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+            pts.push({ lat, lon, id: 'tuple' });
+            return;
+          }
+        }
+        // иначе — рекурсивно обойти
+        val.forEach(walk);
+        return;
+      }
+      if (val && typeof val === 'object') {
         if (Array.isArray(val.balloons)) val.balloons.forEach(walk);
         if (Array.isArray(val.data)) val.data.forEach(walk);
-        pushIfValid(val);
+        pushObj(val);
         for (const k in val) {
           const v = val[k];
-          if (Array.isArray(v) || (typeof v === 'object' && v)) walk(v);
+          if (Array.isArray(v) || (v && typeof v === 'object')) walk(v);
         }
       }
     };
+
     walk(raw);
     return pts;
   }
 
-  // ---- WEATHER VIA SERVERLESS API (api/weather.js with met.no)
   async function getWeather(lat, lon) {
+    const u = new URL('https://api.open-meteo.com/v1/forecast');
+    u.searchParams.set('latitude', lat);
+    u.searchParams.set('longitude', lon);
+    u.searchParams.set('current_weather', 'true');
     try {
-      const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`, { cache: 'no-store' });
-      if (!res.ok) throw new Error('weather http ' + res.status);
-      return await res.json(); // { tC, wind, gust, dir }
-    } catch (e) {
-      console.warn('weather fail', e);
-      return null;
-    }
+      const r = await fetch(u.toString());
+      if (!r.ok) throw new Error('weather HTTP ' + r.status);
+      const j = await r.json();
+      const cw = j.current_weather;
+      if (!cw) return null;
+      return { tempC: cw.temperature, wind: cw.windspeed, dir: cw.winddirection };
+    } catch { return null; }
   }
 
   function makeCircle(lat, lon, color) {
     return L.circleMarker([lat, lon], {
-      radius: 5,
-      color,
-      weight: 1,
-      fillColor: color,
-      fillOpacity: 0.9
+      radius: 5, color, weight: 1, fillColor: color, fillOpacity: 0.9
     });
-  }
-
-  function toIsoMaybe(unixOrIso) {
-    if (typeof unixOrIso === 'number' && unixOrIso > 10_000) {
-      try { return new Date(unixOrIso * 1000).toISOString(); } catch { return String(unixOrIso); }
-    }
-    return (typeof unixOrIso === 'string') ? unixOrIso : '';
   }
 
   async function renderAll() {
@@ -151,15 +161,21 @@
     const allBounds = [];
 
     for (let h = 0; h <= 23; h++) {
-      const raw = await fetchHour(h);
-      if (!raw) continue;
+      let raw = await fetchHour(h);
+
+      // Если час 00 и апстрим пустой — используем твой массив
+      if (h === 0 && (!raw || extractPoints(raw).length === 0) && FALLBACK_TUPLES.length) {
+        raw = FALLBACK_TUPLES;
+        console.info('Using FALLBACK_TUPLES for hour 00:', FALLBACK_TUPLES.length, 'points');
+      }
+
       const pts = extractPoints(raw);
       if (!pts.length) continue;
 
       const layer = (h === 0) ? currentLayer : historyLayer;
       const color = (h === 0) ? '#ff7043' : '#4f93ff';
 
-      // group by id to draw tracks
+      // сгруппируем по id, чтобы рисовать треки
       const byId = new Map();
       for (const p of pts) {
         if (!byId.has(p.id)) byId.set(p.id, []);
@@ -167,7 +183,6 @@
       }
 
       for (const [id, arr] of byId) {
-        // draw markers + async weather popups
         for (const p of arr) {
           const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
           allBounds.push([p.lat, p.lon]);
@@ -175,15 +190,14 @@
             const w = await getWeather(p.lat, p.lon);
             const lines = [
               `<strong>Balloon:</strong> ${id}`,
-              p.t ? `<strong>Time:</strong> ${toIsoMaybe(p.t)}` : '',
+              p.t ? `<strong>Time:</strong> ${new Date(p.t * 1000).toISOString()}` : '',
               p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
-              w ? `<strong>Weather:</strong> ${w.tC}°C, wind ${w.wind} m/s (dir ${w.dir}°)` : `<em>No weather data</em>`
+              w ? `<strong>Weather:</strong> ${w.tempC}°C, wind ${w.wind} km/h (dir ${w.dir}°)` : `<em>No weather data</em>`
             ].filter(Boolean);
             marker.bindPopup(lines.join('<br/>'));
           })();
         }
 
-        // simple per-hour polyline (not the full 24h track per id)
         if (arr.length >= 2) {
           const latlngs = arr.map(p => [p.lat, p.lon]);
           L.polyline(latlngs, { color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5) }).addTo(layer);
@@ -202,6 +216,9 @@
   document.getElementById('fitBtn').onclick = () => { if (lastBounds) map.fitBounds(lastBounds.pad(0.2)); };
 
   renderAll();
+
+  // делаем карту доступной в консоли на всякий случай
+  window.__leafletMap = map;
 })();
 </script>
 </body>
