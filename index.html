@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>WindBorne Atlas – Live Constellation + Weather Overlay</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <style>
+    html, body { height: 100%; margin: 0; font-family: system-ui, Arial, sans-serif; }
+    #app { display: grid; grid-template-rows: auto 1fr; height: 100%; }
+    header { padding: 10px 14px; background: #0b1220; color: #fff; display: flex; gap: 12px; align-items: center; }
+    header h1 { font-size: 16px; margin: 0; opacity: .95; }
+    header .badge { background: #1f2a44; padding: 4px 8px; border-radius: 8px; font-size: 12px; }
+    #map { width: 100%; height: 100%; }
+    .legend {
+      position: absolute; right: 12px; bottom: 12px; background: rgba(255,255,255,.95);
+      border-radius: 10px; box-shadow: 0 6px 20px rgba(0,0,0,.15); padding: 10px 12px; font-size: 12px;
+    }
+    .legend div { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+    .dot-current { background:#ff7043; }
+    .dot-history { background:#4f93ff; }
+    .btn {
+      cursor:pointer; background:#1f6feb; color:#fff; border:none; border-radius:8px; padding:8px 12px; font-weight:600;
+    }
+    .btn:disabled { opacity:.6; cursor:not-allowed; }
+    .controls { display:flex; gap:8px; margin-left:auto; }
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>WindBorne Constellation (last 24h) + Weather</h1>
+    <span class="badge">Live data</span>
+    <div class="controls">
+      <button id="reloadBtn" class="btn">Reload data</button>
+      <button id="fitBtn" class="btn">Fit to markers</button>
+    </div>
+  </header>
+  <div id="map"></div>
+</div>
+
+<div class="legend">
+  <strong>Legend</strong>
+  <div><span class="dot dot-current"></span> Current hour positions (00.json)</div>
+  <div><span class="dot dot-history"></span> Previous hours (01–23.json)</div>
+</div>
+
+<script
+  src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+  integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+  crossorigin=""
+></script>
+<script>
+(async function () {
+  const map = L.map('map', { worldCopyJump: true }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  const currentLayer = L.layerGroup().addTo(map);
+  const historyLayer = L.layerGroup().addTo(map);
+  let lastBounds = null;
+
+  // ---- FETCH FROM SERVERLESS PROXY (api/windborne.js)
+  async function fetchHour(hourIdx) {
+    const hour = String(hourIdx).padStart(2,'0');
+    const url = `/api/windborne?h=${hour}`;
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    } catch (e) {
+      console.warn('Fetch failed for', url, e);
+      return null;
+    }
+  }
+
+  // ---- BEST-EFFORT PARSER (accepts various shapes)
+  function extractPoints(raw) {
+    const pts = [];
+    const pushIfValid = (o) => {
+      if (!o) return;
+      const lat = Number(o.lat ?? o.latitude ?? o.Lat ?? o.y);
+      const lon = Number(o.lon ?? o.lng ?? o.longitude ?? o.Lon ?? o.x);
+      if (Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180) {
+        pts.push({
+          lat, lon,
+          id: o.id ?? o.name ?? o.balloon_id ?? 'unknown',
+          t: o.t ?? o.timestamp ?? o.time ?? null,
+          alt: o.alt ?? o.altitude ?? null
+        });
+      }
+    };
+    const walk = (val) => {
+      if (Array.isArray(val)) { val.forEach(walk); return; }
+      if (typeof val === 'object' && val) {
+        if (Array.isArray(val.balloons)) val.balloons.forEach(walk);
+        if (Array.isArray(val.data)) val.data.forEach(walk);
+        pushIfValid(val);
+        for (const k in val) {
+          const v = val[k];
+          if (Array.isArray(v) || (typeof v === 'object' && v)) walk(v);
+        }
+      }
+    };
+    walk(raw);
+    return pts;
+  }
+
+  // ---- WEATHER VIA SERVERLESS API (api/weather.js with met.no)
+  async function getWeather(lat, lon) {
+    try {
+      const res = await fetch(`/api/weather?lat=${lat}&lon=${lon}`, { cache: 'no-store' });
+      if (!res.ok) throw new Error('weather http ' + res.status);
+      return await res.json(); // { tC, wind, gust, dir }
+    } catch (e) {
+      console.warn('weather fail', e);
+      return null;
+    }
+  }
+
+  function makeCircle(lat, lon, color) {
+    return L.circleMarker([lat, lon], {
+      radius: 5,
+      color,
+      weight: 1,
+      fillColor: color,
+      fillOpacity: 0.9
+    });
+  }
+
+  function toIsoMaybe(unixOrIso) {
+    if (typeof unixOrIso === 'number' && unixOrIso > 10_000) {
+      try { return new Date(unixOrIso * 1000).toISOString(); } catch { return String(unixOrIso); }
+    }
+    return (typeof unixOrIso === 'string') ? unixOrIso : '';
+  }
+
+  async function renderAll() {
+    document.getElementById('reloadBtn').disabled = true;
+    currentLayer.clearLayers();
+    historyLayer.clearLayers();
+    lastBounds = null;
+
+    const allBounds = [];
+
+    for (let h = 0; h <= 23; h++) {
+      const raw = await fetchHour(h);
+      if (!raw) continue;
+      const pts = extractPoints(raw);
+      if (!pts.length) continue;
+
+      const layer = (h === 0) ? currentLayer : historyLayer;
+      const color = (h === 0) ? '#ff7043' : '#4f93ff';
+
+      // group by id to draw tracks
+      const byId = new Map();
+      for (const p of pts) {
+        if (!byId.has(p.id)) byId.set(p.id, []);
+        byId.get(p.id).push(p);
+      }
+
+      for (const [id, arr] of byId) {
+        // draw markers + async weather popups
+        for (const p of arr) {
+          const marker = makeCircle(p.lat, p.lon, color).addTo(layer);
+          allBounds.push([p.lat, p.lon]);
+          (async () => {
+            const w = await getWeather(p.lat, p.lon);
+            const lines = [
+              `<strong>Balloon:</strong> ${id}`,
+              p.t ? `<strong>Time:</strong> ${toIsoMaybe(p.t)}` : '',
+              p.alt ? `<strong>Alt:</strong> ${p.alt} m` : '',
+              w ? `<strong>Weather:</strong> ${w.tC}°C, wind ${w.wind} m/s (dir ${w.dir}°)` : `<em>No weather data</em>`
+            ].filter(Boolean);
+            marker.bindPopup(lines.join('<br/>'));
+          })();
+        }
+
+        // simple per-hour polyline (not the full 24h track per id)
+        if (arr.length >= 2) {
+          const latlngs = arr.map(p => [p.lat, p.lon]);
+          L.polyline(latlngs, { color, weight: (h === 0 ? 3 : 2), opacity: (h === 0 ? 0.8 : 0.5) }).addTo(layer);
+        }
+      }
+    }
+
+    if (allBounds.length) {
+      lastBounds = L.latLngBounds(allBounds);
+      map.fitBounds(lastBounds.pad(0.2));
+    }
+    document.getElementById('reloadBtn').disabled = false;
+  }
+
+  document.getElementById('reloadBtn').onclick = renderAll;
+  document.getElementById('fitBtn').onclick = () => { if (lastBounds) map.fitBounds(lastBounds.pad(0.2)); };
+
+  renderAll();
+})();
+</script>
+</body>
+</html>
